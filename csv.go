@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2020 Yorick Terweijden
+
+package recordwriter
+
+import (
+	"io"
+)
+
+type CSVWriter struct {
+	w                io.StringWriter
+	lastItemWasWrite bool
+	count            int
+	sep              string
+	quote            string
+	quoteAll         bool
+}
+
+func NewCSVWriter(w io.StringWriter) *CSVWriter {
+	csv := &CSVWriter{
+		w:        w,
+		sep:      `,`,
+		quote:    `"`,
+		quoteAll: true,
+	}
+
+	return csv
+}
+
+func (csv *CSVWriter) SetSeperator(s string) {
+	csv.sep = s
+}
+
+func (csv *CSVWriter) SetQuote(s string) {
+	csv.quote = s
+}
+
+func (csv *CSVWriter) QuoteAll(enabled bool) {
+	csv.quoteAll = enabled
+}
+
+func (csv *CSVWriter) Write(s string) {
+	csv.w.WriteString(s)
+	csv.count++
+	csv.lastItemWasWrite = true
+}
+
+func (csv *CSVWriter) WriteHeader(s string) {
+	csv.WriteQuoted(s)
+	csv.count++
+	csv.lastItemWasWrite = true
+}
+
+func (csv *CSVWriter) WriteQuoted(s string) {
+	csv.w.WriteString(csv.quote)
+	csv.w.WriteString(s)
+	csv.w.WriteString(csv.quote)
+	csv.count++
+	csv.lastItemWasWrite = true
+}
+
+func (csv *CSVWriter) Next() {
+	csv.w.WriteString(csv.sep)
+	csv.lastItemWasWrite = false
+}
+
+func (csv *CSVWriter) Skip() {
+	if !csv.lastItemWasWrite {
+		csv.count++
+		if csv.quoteAll {
+			csv.w.WriteString(csv.quote)
+			csv.w.WriteString(csv.quote)
+		}
+	}
+	csv.lastItemWasWrite = false
+}
+
+func (csv *CSVWriter) FinalizeHeader() {
+	csv.EOR(csv.count)
+}
+
+func (csv *CSVWriter) EOR(columns int) {
+	// finalize the columns
+	if csv.count < columns {
+		for csv.count < columns {
+			csv.Skip()
+			if csv.count != columns {
+				csv.Next()
+			}
+		}
+	}
+	csv.w.WriteString("\n")
+	csv.lastItemWasWrite = false
+	csv.count = 0
+}
+
+func (csv *CSVWriter) Close() {}
