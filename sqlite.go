@@ -53,6 +53,7 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	_, err = rw.db.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
 		strings.Join(rw.getCreateColumns(), `,`)))
 	if err != nil {
