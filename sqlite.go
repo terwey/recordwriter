@@ -31,6 +31,7 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
+	// rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=off&_locking=EXCLUSIVE", path))
 	rw.db, err = sql.Open("sqlite3", path)
 	if err != nil {
 		log.Fatal(err)
