@@ -118,8 +118,6 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		}
 	}
 
-	// log.Printf("buf: %s", rw.buf)
-
 	_, err = rw.txStmt.Exec(rw.buf...)
 	if err != nil {
 		log.Fatal(err)
