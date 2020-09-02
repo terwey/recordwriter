@@ -25,6 +25,9 @@ type SQLiteWriter struct {
 	size             int
 	maxSize          int
 	lastItemWasWrite bool
+	array            map[string][]string
+	arrayKey         string
+	writeToArray     bool
 }
 
 func NewSQLWriter(path string, size int) *SQLiteWriter {
@@ -37,6 +40,7 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 		log.Fatal(err)
 	}
 	rw.maxSize = size
+	rw.array = make(map[string][]string)
 
 	return rw
 }
@@ -74,12 +78,22 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 }
 
 func (rw *SQLiteWriter) Write(s string) {
+	if rw.writeToArray {
+		rw.array[rw.arrayKey] = append(rw.array[rw.arrayKey], s)
+		return
+	}
+
 	rw.buf = append(rw.buf, s)
 	rw.count++
 	rw.lastItemWasWrite = true
 }
 
 func (rw *SQLiteWriter) WriteSlice(val []string) {
+	if rw.writeToArray {
+		rw.array[rw.arrayKey] = append(rw.array[rw.arrayKey], val...)
+		return
+	}
+
 	for _, s := range val {
 		rw.buf = append(rw.buf, s)
 	}
@@ -87,12 +101,6 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 	rw.count++
 	rw.lastItemWasWrite = true
 }
-
-// func (rw *SQLiteWriter) WriteQuoted(s string) {
-// 	rw.buf = append(rw.buf, s)
-// 	rw.count++
-// 	rw.lastItemWasWrite = true
-// }
 
 func (rw *SQLiteWriter) Next() {
 	rw.lastItemWasWrite = false
@@ -132,6 +140,8 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	_, err = rw.txStmt.Exec(rw.buf...)
 	if err != nil {
+		log.Printf("header: %v", rw.getCreateColumns())
+		log.Printf("data: %v", rw.buf)
 		log.Fatal(err)
 	}
 	rw.buf = make([]interface{}, 0, len(rw.header))
@@ -179,5 +189,17 @@ func (rw *SQLiteWriter) getQuestionmarks() []string {
 	return qm
 }
 
-func (rw *SQLiteWriter) BeginArray(key string) {}
-func (rw *SQLiteWriter) CloseArray(key string) {}
+func (rw *SQLiteWriter) BeginArray(key string) {
+	rw.arrayKey = key
+	rw.writeToArray = true
+}
+func (rw *SQLiteWriter) CloseArray(key string) {
+	rw.writeToArray = false
+
+	rw.buf = append(rw.buf, strings.Join(rw.array[key], `,`))
+	rw.count++
+
+	rw.array[key] = make([]string, 0)
+
+	rw.lastItemWasWrite = true
+}

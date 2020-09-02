@@ -48,7 +48,6 @@ func (csv *CSVWriter) QuoteAll(enabled bool) {
 func (csv *CSVWriter) Write(s string) {
 	if csv.writeToArray {
 		csv.array[csv.arrayKey] = append(csv.array[csv.arrayKey], s)
-		csv.count++
 		return
 	}
 	if csv.quoteAll {
@@ -66,7 +65,6 @@ func (csv *CSVWriter) Write(s string) {
 func (csv *CSVWriter) WriteSlice(val []string) {
 	if csv.writeToArray {
 		csv.array[csv.arrayKey] = append(csv.array[csv.arrayKey], val...)
-		csv.count++
 		return
 	}
 
@@ -105,6 +103,7 @@ func (csv *CSVWriter) CloseArray(key string) {
 	if csv.quoteAll {
 		csv.w.WriteString(csv.quote)
 	}
+	csv.count++
 	csv.array[key] = make([]string, 0)
 
 	csv.lastItemWasWrite = true
@@ -131,8 +130,6 @@ func (csv *CSVWriter) FinalizeHeader() {
 }
 
 func (csv *CSVWriter) EOR(columns int) {
-	// TODO: figure out why these are off, the arrays are making the count go haywire
-	// log.Printf("csv.Count: %d, columnCount: %d", csv.count, columns)
 	// finalize the columns
 	if csv.count < columns {
 		for csv.count < columns {
