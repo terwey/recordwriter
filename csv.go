@@ -5,6 +5,8 @@ package recordwriter
 
 import (
 	"io"
+	"log"
+	"strings"
 )
 
 type CSVWriter struct {
@@ -14,6 +16,9 @@ type CSVWriter struct {
 	sep              string
 	quote            string
 	quoteAll         bool
+	array            map[string][]string
+	arrayKey         string
+	writeToArray     bool
 }
 
 func NewCSVWriter(w io.StringWriter) *CSVWriter {
@@ -23,6 +28,8 @@ func NewCSVWriter(w io.StringWriter) *CSVWriter {
 		quote:    `"`,
 		quoteAll: true,
 	}
+
+	csv.array = make(map[string][]string)
 
 	return csv
 }
@@ -40,22 +47,44 @@ func (csv *CSVWriter) QuoteAll(enabled bool) {
 }
 
 func (csv *CSVWriter) Write(s string) {
+	if csv.writeToArray {
+		csv.array[csv.arrayKey] = append(csv.array[csv.arrayKey], s)
+		return
+	}
+	if csv.quoteAll {
+		csv.w.WriteString(csv.quote)
+	}
+
 	csv.w.WriteString(s)
+	if csv.quoteAll {
+		csv.w.WriteString(csv.quote)
+	}
 	csv.count++
 	csv.lastItemWasWrite = true
 }
 
 func (csv *CSVWriter) WriteHeader(s string) {
-	csv.WriteQuoted(s)
+	csv.Write(s)
 	csv.count++
 	csv.lastItemWasWrite = true
 }
 
-func (csv *CSVWriter) WriteQuoted(s string) {
-	csv.w.WriteString(csv.quote)
-	csv.w.WriteString(s)
-	csv.w.WriteString(csv.quote)
-	csv.count++
+func (csv *CSVWriter) BeginArray(key string) {
+	csv.arrayKey = key
+	csv.writeToArray = true
+}
+
+func (csv *CSVWriter) CloseArray(key string) {
+	csv.writeToArray = false
+	if csv.quoteAll {
+		csv.w.WriteString(csv.quote)
+	}
+	csv.w.WriteString(strings.Join(csv.array[key], `,`))
+	if csv.quoteAll {
+		csv.w.WriteString(csv.quote)
+	}
+	csv.array[key] = make([]string, 0)
+
 	csv.lastItemWasWrite = true
 }
 
@@ -80,6 +109,7 @@ func (csv *CSVWriter) FinalizeHeader() {
 }
 
 func (csv *CSVWriter) EOR(columns int) {
+	log.Printf("csv.Count: %d, columnCount: %d", csv.count, columns)
 	// finalize the columns
 	if csv.count < columns {
 		for csv.count < columns {

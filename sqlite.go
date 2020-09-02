@@ -78,11 +78,12 @@ func (rw *SQLiteWriter) Write(s string) {
 	rw.count++
 	rw.lastItemWasWrite = true
 }
-func (rw *SQLiteWriter) WriteQuoted(s string) {
-	rw.buf = append(rw.buf, s)
-	rw.count++
-	rw.lastItemWasWrite = true
-}
+
+// func (rw *SQLiteWriter) WriteQuoted(s string) {
+// 	rw.buf = append(rw.buf, s)
+// 	rw.count++
+// 	rw.lastItemWasWrite = true
+// }
 
 func (rw *SQLiteWriter) Next() {
 	rw.lastItemWasWrite = false
@@ -168,3 +169,6 @@ func (rw *SQLiteWriter) getQuestionmarks() []string {
 
 	return qm
 }
+
+func (rw *SQLiteWriter) BeginArray(key string) {}
+func (rw *SQLiteWriter) CloseArray(key string) {}
