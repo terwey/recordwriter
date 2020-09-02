@@ -79,6 +79,15 @@ func (rw *SQLiteWriter) Write(s string) {
 	rw.lastItemWasWrite = true
 }
 
+func (rw *SQLiteWriter) WriteSlice(val []string) {
+	for _, s := range val {
+		rw.buf = append(rw.buf, s)
+	}
+
+	rw.count++
+	rw.lastItemWasWrite = true
+}
+
 // func (rw *SQLiteWriter) WriteQuoted(s string) {
 // 	rw.buf = append(rw.buf, s)
 // 	rw.count++
