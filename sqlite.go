@@ -140,9 +140,11 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	_, err = rw.txStmt.Exec(rw.buf...)
 	if err != nil {
-		log.Printf("header: %v", rw.getCreateColumns())
-		log.Printf("data: %v", rw.buf)
+		log.Printf("Failed importing to SQLite")
+		log.Printf("header: \n----------\n%v", rw.getCreateColumns())
+		log.Printf("data: \n----------\n%v", rw.buf)
 		log.Fatal(err)
+		log.Printf("----------")
 	}
 	rw.buf = make([]interface{}, 0, len(rw.header))
 	if rw.rowCount > rw.size {
