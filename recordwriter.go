@@ -7,6 +7,7 @@ type RecordWriter interface {
 	WriteHeader(s string)
 	FinalizeHeader()
 	Write(s string)
+	WriteByte(s []byte)
 	WriteSlice(val []string)
 	// WriteQuoted(s string)
 	// Next writes a comma

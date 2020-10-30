@@ -34,8 +34,8 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
-	// rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=off&_locking=EXCLUSIVE", path))
-	rw.db, err = sql.Open("sqlite3", path)
+	rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=0&_locking=EXCLUSIVE", path))
+	// rw.db, err = sql.Open("sqlite3", path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -88,6 +88,12 @@ func (rw *SQLiteWriter) Write(s string) {
 	rw.lastItemWasWrite = true
 }
 
+func (rw *SQLiteWriter) WriteByte(s []byte) {
+	rw.buf = append(rw.buf, s)
+	rw.count++
+	rw.lastItemWasWrite = true
+}
+
 func (rw *SQLiteWriter) WriteSlice(val []string) {
 	if rw.writeToArray {
 		rw.array[rw.arrayKey] = append(rw.array[rw.arrayKey], val...)
@@ -127,6 +133,9 @@ func (rw *SQLiteWriter) EOR(columns int) {
 			if s, ok := v.(string); ok {
 				guess += len(s)
 			}
+			if s, ok := v.([]byte); ok {
+				guess += len(s)
+			}
 		}
 		rw.size = rw.maxSize / guess
 	}
@@ -140,10 +149,18 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	_, err = rw.txStmt.Exec(rw.buf...)
 	if err != nil {
+		header := rw.getCreateColumns()
 		log.Printf("Failed importing to SQLite")
-		log.Printf("header: \n----------\n%v", rw.getCreateColumns())
-		log.Printf("data: \n----------\n%v", rw.buf)
-		log.Fatal(err)
+		log.Printf("header: \n----------\n%v", header)
+		log.Printf("data: \n----------\n")
+		for i, dat := range rw.buf {
+			if i < len(header) {
+				fmt.Printf("%d: [%s] %v\n", i+1, header[i], dat)
+			} else {
+				fmt.Printf("%d: %v\n", i+1, dat)
+			}
+		}
+		log.Printf("%s", err)
 		log.Printf("----------")
 	}
 	rw.buf = make([]interface{}, 0, len(rw.header))

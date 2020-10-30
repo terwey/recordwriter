@@ -62,6 +62,10 @@ func (csv *CSVWriter) Write(s string) {
 	csv.lastItemWasWrite = true
 }
 
+func (csv *CSVWriter) WriteByte(s []byte) {
+	csv.Write(string(s))
+}
+
 func (csv *CSVWriter) WriteSlice(val []string) {
 	if csv.writeToArray {
 		csv.array[csv.arrayKey] = append(csv.array[csv.arrayKey], val...)
