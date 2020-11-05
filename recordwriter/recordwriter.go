@@ -4,16 +4,20 @@
 package recordwriter
 
 type RecordWriter interface {
+	// WriteHeader append the string to the header row
 	WriteHeader(s string)
+	// FinalizeHeader signals the last header item has been set
 	FinalizeHeader()
+	// Write append the string as a column to the row
 	Write(s string)
+	// WriteByte append the bytes as a column to the row
 	WriteByte(s []byte)
 	WriteSlice(val []string)
-	// WriteQuoted(s string)
 	// Next writes a comma
 	Next()
 	// Skip writes a comma unless it's the last
 	Skip()
+	// EOR finalizes the row
 	EOR(columns int)
 	Close()
 	BeginArray(key string)

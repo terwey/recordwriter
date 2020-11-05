@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2020 Yorick Terweijden
 
+// #cgo CFLAGS: -DSQLITE_DEFAULT_PAGE_SIZE=32768
+
 package recordwriter
 
 import (
@@ -9,6 +11,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unsafe"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -28,6 +31,7 @@ type SQLiteWriter struct {
 	array            map[string][]string
 	arrayKey         string
 	writeToArray     bool
+	path             string
 }
 
 func NewSQLWriter(path string, size int) *SQLiteWriter {
@@ -41,6 +45,7 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 	}
 	rw.maxSize = size
 	rw.array = make(map[string][]string)
+	rw.path = path
 
 	return rw
 }
@@ -88,10 +93,17 @@ func (rw *SQLiteWriter) Write(s string) {
 	rw.lastItemWasWrite = true
 }
 
+// WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
+// beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	rw.buf = append(rw.buf, s)
+	// rw.buf = append(rw.buf, s)
+	rw.buf = append(rw.buf, ByteSlice2String(s))
 	rw.count++
 	rw.lastItemWasWrite = true
+}
+
+func ByteSlice2String(bs []byte) string {
+	return *(*string)(unsafe.Pointer(&bs))
 }
 
 func (rw *SQLiteWriter) WriteSlice(val []string) {
@@ -138,6 +150,7 @@ func (rw *SQLiteWriter) EOR(columns int) {
 			}
 		}
 		rw.size = rw.maxSize / guess
+		// log.Printf("rw.size %d = rw.maxSize %d / guess %d", rw.size, rw.maxSize, guess)
 	}
 
 	if rw.count < columns {
@@ -153,13 +166,7 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		log.Printf("Failed importing to SQLite")
 		log.Printf("header: \n----------\n%v", header)
 		log.Printf("data: \n----------\n")
-		for i, dat := range rw.buf {
-			if i < len(header) {
-				fmt.Printf("%d: [%s] %v\n", i+1, header[i], dat)
-			} else {
-				fmt.Printf("%d: %v\n", i+1, dat)
-			}
-		}
+		fmt.Printf("%s", rw.buf)
 		log.Printf("%s", err)
 		log.Printf("----------")
 	}
@@ -178,6 +185,35 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	rw.count = 0
 	rw.rowCount++
+}
+
+func (rw *SQLiteWriter) Merge(other ...int) {
+	var err error
+	rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=0&_locking=EXCLUSIVE", rw.path))
+	if err != nil {
+		log.Fatalf("Cannot open for merging (%s): %s", rw.path, err)
+	}
+	for _, i := range other {
+		target := fmt.Sprintf("%s.%d", rw.path, i)
+		_, err := rw.db.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db2", target))
+		if err != nil {
+			log.Fatalf("Cannot attach (%s): %s", target, err)
+		}
+
+		_, err = rw.db.Exec("INSERT INTO main.data SELECT * FROM db2.data")
+		if err != nil {
+			log.Fatalf("Cannot insert (%s): %s", target, err)
+		}
+
+		_, err = rw.db.Exec("DETACH DATABASE db2")
+		if err != nil {
+			log.Fatalf("Cannot detach (%s): %s", target, err)
+		}
+
+		os.Remove(target)
+	}
+
+	rw.db.Close()
 }
 
 func (rw *SQLiteWriter) Close() {
