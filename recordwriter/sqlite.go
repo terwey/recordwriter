@@ -25,7 +25,6 @@ import (
 type SQLiteWriter struct {
 	conn             *sqlite3.Conn
 	stmt             *sqlite3.Stmt
-	bulkStmt         *sqlite3.Stmt
 	header           []string
 	buf              []string
 	count            int
@@ -36,12 +35,9 @@ type SQLiteWriter struct {
 	arrayKey         string
 	writeToArray     bool
 	path             string
-
-	bulkSize  int
-	bulkCount int
 }
 
-func NewSQLWriter(path string, size int, bulkSize int) *SQLiteWriter {
+func NewSQLWriter(path string, size int) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
@@ -50,12 +46,9 @@ func NewSQLWriter(path string, size int, bulkSize int) *SQLiteWriter {
 		log.Fatal(err)
 	}
 
-	// rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=memory&_sync=0&_locking=EXCLUSIVE", path))
-	// TODO: remove rw.maxSize
 	rw.size = size
 	rw.array = make(map[string][]string)
 	rw.path = path
-	rw.bulkSize = bulkSize
 
 	return rw
 }
@@ -79,20 +72,9 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatal(err)
 	}
 
-	if rw.bulkSize > 1 {
-		rw.bulkStmt, err = rw.conn.Prepare(rw.GetQuery(rw.bulkSize))
-		if err != nil {
-			log.Fatalf("sqlite cannot prepare bulk query, error: %s\nquery: %s", err, rw.GetQuery(rw.bulkSize))
-		}
-	} else {
-		rw.stmt, err = rw.conn.Prepare(rw.GetQuery(1))
-		if err != nil {
-			log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery(1))
-		}
-	}
-
-	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
-		log.Fatal(err)
+	rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
+	if err != nil {
+		log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
 	}
 
 	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
@@ -107,6 +89,10 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatal(err)
 	}
 
+	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+		log.Fatal(err)
+	}
+
 	// if err = rw.conn.Exec("PRAGMA automatic_index = 0"); err != nil {
 	// 	log.Fatal(err)
 	// }
@@ -117,18 +103,7 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 	}
 }
 
-func (rw *SQLiteWriter) GetQuery(bulksize int) string {
-	if bulksize > 1 {
-		value := fmt.Sprintf("(%s)", strings.Join(rw.getQuestionmarks(), `,`))
-		values := make([]string, 0)
-		for i := 0; i <= bulksize; i++ {
-			values = append(values, value)
-		}
-		return fmt.Sprintf("INSERT INTO data (%s) VALUES %s",
-			strings.Join(rw.header, `,`),
-			strings.Join(values, ", "),
-		)
-	}
+func (rw *SQLiteWriter) GetQuery() string {
 	return fmt.Sprintf("INSERT INTO data (%s) VALUES (%s)",
 		strings.Join(rw.header, `,`),
 		strings.Join(rw.getQuestionmarks(), `,`))
@@ -194,36 +169,16 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		}
 	}
 
-	if rw.bulkSize > 1 {
-		rw.bulkCount++
-		// log.Printf("Bulk increment: %d", rw.bulkCount)
-	}
-
-	// log.Printf("rw.header: %v", rw.header)
-	// log.Printf("rw.headerBuf: %v", rw.headerBuf)
-
-	// log.Printf("query: %s", rw.GetQuery())
-
 	// assume default is one
-	if rw.bulkSize == 1 {
-		// log.Printf("Single insert: %d", rw.bulkCount)
-		// err = rw.stmt.Exec(rw.buf...)
-		err = rw.stmt.ExecStrings(rw.buf...)
-	}
+	// err = rw.stmt.Exec(rw.buf...)
+	err = rw.stmt.ExecStrings(rw.buf...)
 
-	if rw.bulkSize > 1 && rw.bulkCount == rw.bulkSize {
-		// log.Printf("Bulk insert: %d", rw.bulkCount)
-		// err = rw.bulkStmt.Exec(rw.buf...)
-		err = rw.bulkStmt.ExecStrings(rw.buf...)
-	}
-
-	// _, err = rw.txStmt.Exec(rw.buf...)
 	if err != nil {
 		rw.handleError(err)
 	}
 
 	// log.Printf("Checking to flush")
-	if rw.bulkSize == rw.bulkCount && rw.rowCount > rw.size {
+	if rw.rowCount > rw.size {
 		// log.Printf("Flushing: %d, bulkCount: %d", rw.rowCount, rw.bulkCount)
 		if err = rw.conn.Commit(); err != nil {
 			log.Fatal(err)
@@ -236,12 +191,8 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		rw.rowCount = 0
 	}
 
-	if rw.bulkSize == 1 || rw.bulkCount == rw.bulkSize {
-		// log.Printf("Reset bulkcount")
-		// rw.buf = make([]interface{}, 0, len(rw.header))
-		rw.buf = make([]string, 0, len(rw.header))
-		rw.bulkCount = 0
-	}
+	// rw.buf = make([]interface{}, 0, len(rw.header))
+	rw.buf = make([]string, 0, len(rw.header))
 
 	rw.count = 0
 	rw.rowCount++
@@ -256,7 +207,7 @@ func (rw *SQLiteWriter) handleError(err error) {
 	log.Printf("%s", rw.buf)
 	log.Printf("%s", err)
 	log.Printf("----------")
-	log.Printf("Query: \n%s", rw.GetQuery(rw.bulkSize))
+	log.Printf("Query: \n%s", rw.GetQuery())
 	log.Printf("----------")
 	log.Fatal("Ending")
 }
@@ -272,10 +223,6 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
 				log.Fatalf("Cannot open for merging (%s): %s", rw.path, err)
 			}
 
-			if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
-				log.Fatal(err)
-			}
-
 			if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
 				log.Fatal(err)
 			}
@@ -284,11 +231,11 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
 				log.Fatal(err)
 			}
 
-			// if err = rw.conn.Exec("PRAGMA automatic_index = 0"); err != nil {
-			// 	log.Fatal(err)
-			// }
-
 			if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+				log.Fatal(err)
+			}
+
+			if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
 				log.Fatal(err)
 			}
 
@@ -329,27 +276,13 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
 
 func (rw *SQLiteWriter) Close() error {
 	// flush out the remainder
-	if rw.bulkCount > 0 {
-		// log.Printf("Leftovers bulkCount: %d, len(rw.buf): %d, query: \n%s", rw.bulkCount, len(rw.buf), rw.GetQuery(rw.bulkCount))
-		// err := rw.conn.Exec(rw.GetQuery(rw.bulkCount), rw.buf...)
-		err := rw.conn.ExecStrings(rw.GetQuery(rw.bulkCount), rw.buf...)
-		if err != nil {
-			rw.handleError(fmt.Errorf("Leftovers cannot be inserted: %w", err))
-		}
-	}
 
 	if err := rw.conn.Commit(); err != nil {
 		return err
 	}
 
-	if rw.bulkSize > 1 {
-		if err := rw.bulkStmt.Close(); err != nil {
-			return err
-		}
-	} else {
-		if err := rw.stmt.Close(); err != nil {
-			return err
-		}
+	if err := rw.stmt.Close(); err != nil {
+		return err
 	}
 
 	if err := rw.conn.Close(); err != nil {
