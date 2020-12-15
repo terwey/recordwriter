@@ -19,7 +19,7 @@ type RecordWriter interface {
 	Skip()
 	// EOR finalizes the row
 	EOR(columns int)
-	Close()
+	Close() error
 	BeginArray(key string)
 	CloseArray(key string)
 }

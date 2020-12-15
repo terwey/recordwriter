@@ -1,32 +1,27 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2020 Yorick Terweijden
 
-// #cgo CFLAGS: -DSQLITE_DEFAULT_PAGE_SIZE=32768
-
 package recordwriter
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 	"unsafe"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/productsupcom/go-sqlite-lite/sqlite3"
 )
 
 type SQLiteWriter struct {
-	db               *sql.DB
-	tx               *sql.Tx
-	stmt             *sql.Stmt
-	txStmt           *sql.Stmt
+	conn             *sqlite3.Conn
+	stmt             *sqlite3.Stmt
 	header           []string
-	buf              []interface{}
 	count            int
 	rowCount         int
 	size             int
-	maxSize          int
 	lastItemWasWrite bool
 	array            map[string][]string
 	arrayKey         string
@@ -38,16 +33,20 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
-	rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=0&_locking=EXCLUSIVE", path))
-	// rw.db, err = sql.Open("sqlite3", path)
+	rw.conn, err = sqlite3.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
-	rw.maxSize = size
+
+	rw.size = size
 	rw.array = make(map[string][]string)
 	rw.path = path
 
 	return rw
+}
+
+func (rw *SQLiteWriter) GetPath() string {
+	return rw.path
 }
 
 func (rw *SQLiteWriter) WriteHeader(s string) {
@@ -55,31 +54,44 @@ func (rw *SQLiteWriter) WriteHeader(s string) {
 }
 
 func (rw *SQLiteWriter) FinalizeHeader() {
-	// for compatibility with the csv writer we need to reset the buf
-	rw.buf = make([]interface{}, 0)
 	var err error
-	_, err = rw.db.Exec("DROP TABLE IF EXISTS data")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = rw.db.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
+	err = rw.conn.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
 		strings.Join(rw.getCreateColumns(), `,`)))
 	if err != nil {
 		log.Fatal(err)
 	}
-	query := fmt.Sprintf("INSERT INTO data (%s) VALUES (%s)",
+
+	rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
+	if err != nil {
+		log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
+	}
+
+	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+		log.Fatal(err)
+	}
+
+	err = rw.conn.BeginExclusive()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (rw *SQLiteWriter) GetQuery() string {
+	return fmt.Sprintf("INSERT INTO data (%s) VALUES (%s)",
 		strings.Join(rw.header, `,`),
 		strings.Join(rw.getQuestionmarks(), `,`))
-
-	rw.stmt, err = rw.db.Prepare(query)
-	if err != nil {
-		log.Fatal(err)
-	}
-	rw.tx, err = rw.db.Begin()
-	if err != nil {
-		log.Fatal(err)
-	}
 }
 
 func (rw *SQLiteWriter) Write(s string) {
@@ -88,7 +100,9 @@ func (rw *SQLiteWriter) Write(s string) {
 		return
 	}
 
-	rw.buf = append(rw.buf, s)
+	if err := rw.stmt.BindString(s, rw.count); err != nil {
+		log.Fatal(err)
+	}
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -96,8 +110,9 @@ func (rw *SQLiteWriter) Write(s string) {
 // WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	// rw.buf = append(rw.buf, s)
-	rw.buf = append(rw.buf, ByteSlice2String(s))
+	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
+		log.Fatal(err)
+	}
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -113,7 +128,9 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 	}
 
 	for _, s := range val {
-		rw.buf = append(rw.buf, s)
+		if err := rw.stmt.BindString(s, rw.count); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	rw.count++
@@ -126,7 +143,10 @@ func (rw *SQLiteWriter) Next() {
 
 func (rw *SQLiteWriter) Skip() {
 	if !rw.lastItemWasWrite {
-		rw.buf = append(rw.buf, nil)
+		// originally this wrote away a nil but the existing implementation writes an empty string
+		if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+			log.Fatal(err)
+		}
 		rw.count++
 	}
 	rw.lastItemWasWrite = false
@@ -134,52 +154,31 @@ func (rw *SQLiteWriter) Skip() {
 
 func (rw *SQLiteWriter) EOR(columns int) {
 	var err error
-	if rw.txStmt == nil {
-		rw.txStmt = rw.tx.Stmt(rw.stmt)
-	}
-
-	// we're gonna guestimate the size here
-	if rw.size == 0 {
-		var guess int
-		for _, v := range rw.buf {
-			if s, ok := v.(string); ok {
-				guess += len(s)
-			}
-			if s, ok := v.([]byte); ok {
-				guess += len(s)
-			}
-		}
-		rw.size = rw.maxSize / guess
-		// log.Printf("rw.size %d = rw.maxSize %d / guess %d", rw.size, rw.maxSize, guess)
-	}
 
 	if rw.count < columns {
 		for rw.count < columns {
-			rw.buf = append(rw.buf, nil)
+			if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+				log.Fatal(err)
+			}
 			rw.count++
 		}
 	}
 
-	_, err = rw.txStmt.Exec(rw.buf...)
+	err = rw.stmt.ExecPrebound()
+
 	if err != nil {
-		header := rw.getCreateColumns()
-		log.Printf("Failed importing to SQLite")
-		log.Printf("header: \n----------\n%v", header)
-		log.Printf("data: \n----------\n")
-		fmt.Printf("%s", rw.buf)
-		log.Printf("%s", err)
-		log.Printf("----------")
+		rw.handleError(err)
 	}
-	rw.buf = make([]interface{}, 0, len(rw.header))
+
 	if rw.rowCount > rw.size {
-		if err = rw.tx.Commit(); err != nil {
+		if err = rw.conn.Commit(); err != nil {
 			log.Fatal(err)
 		}
-		rw.tx, err = rw.db.Begin()
+		err = rw.conn.BeginExclusive()
 		if err != nil {
 			log.Fatal(err)
 		}
-		rw.txStmt = rw.tx.Stmt(rw.stmt)
+
 		rw.rowCount = 0
 	}
 
@@ -187,25 +186,71 @@ func (rw *SQLiteWriter) EOR(columns int) {
 	rw.rowCount++
 }
 
-func (rw *SQLiteWriter) Merge(other ...int) {
+func (rw *SQLiteWriter) handleError(err error) {
+	header := rw.getCreateColumns()
+	log.Printf("\n----------")
+	log.Printf("Failed importing to SQLite")
+	log.Printf("header (len: %d): \n----------\n%v", len(header), header)
+	log.Printf("%s", err)
+	log.Printf("----------")
+	log.Printf("Query: \n%s", rw.GetQuery())
+	log.Printf("----------")
+	log.Fatal("Ending")
+}
+
+func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
+	defer wg.Done()
+	opened := false
 	var err error
-	rw.db, err = sql.Open("sqlite3", fmt.Sprintf("%s?_journal=off&_sync=0&_locking=EXCLUSIVE", rw.path))
-	if err != nil {
-		log.Fatalf("Cannot open for merging (%s): %s", rw.path, err)
-	}
-	for _, i := range other {
-		target := fmt.Sprintf("%s.%d", rw.path, i)
-		_, err := rw.db.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db2", target))
+	var start time.Time
+	for target := range ready {
+		if !opened {
+			rw.conn, err = sqlite3.Open(rw.path)
+			if err != nil {
+				log.Fatalf("Cannot open for merging (%s): %s", rw.path, err)
+			}
+
+			if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
+				log.Fatal(err)
+			}
+
+			if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
+				log.Fatal(err)
+			}
+
+			if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+				log.Fatal(err)
+			}
+
+			if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+				log.Fatal(err)
+			}
+
+			opened = true
+			start = time.Now()
+		}
+
+		err := rw.conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db2", target))
 		if err != nil {
 			log.Fatalf("Cannot attach (%s): %s", target, err)
 		}
 
-		_, err = rw.db.Exec("INSERT INTO main.data SELECT * FROM db2.data")
+		err = rw.conn.BeginExclusive()
+		if err != nil {
+			log.Fatalf("Cannot begin: %s", err)
+		}
+
+		err = rw.conn.Exec("INSERT INTO main.data SELECT * FROM db2.data")
 		if err != nil {
 			log.Fatalf("Cannot insert (%s): %s", target, err)
 		}
 
-		_, err = rw.db.Exec("DETACH DATABASE db2")
+		err = rw.conn.Commit()
+		if err != nil {
+			log.Fatalf("Cannot commit: %s", err)
+		}
+
+		err = rw.conn.Exec("DETACH DATABASE db2")
 		if err != nil {
 			log.Fatalf("Cannot detach (%s): %s", target, err)
 		}
@@ -213,17 +258,27 @@ func (rw *SQLiteWriter) Merge(other ...int) {
 		os.Remove(target)
 	}
 
-	rw.db.Close()
+	duration <- time.Since(start)
+
+	rw.conn.Close()
 }
 
-func (rw *SQLiteWriter) Close() {
-	if err := rw.tx.Commit(); err != nil {
-		log.Fatal(err)
+func (rw *SQLiteWriter) Close() error {
+	// flush out the remainder
+
+	if err := rw.conn.Commit(); err != nil {
+		return err
 	}
 
-	if err := rw.db.Close(); err != nil {
-		log.Fatal(err)
+	if err := rw.stmt.Close(); err != nil {
+		return err
 	}
+
+	if err := rw.conn.Close(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (rw *SQLiteWriter) getCreateColumns() []string {
@@ -237,6 +292,7 @@ func (rw *SQLiteWriter) getCreateColumns() []string {
 
 func (rw *SQLiteWriter) getQuestionmarks() []string {
 	var qm []string
+
 	for range rw.header {
 		qm = append(qm, `?`)
 	}
@@ -251,7 +307,10 @@ func (rw *SQLiteWriter) BeginArray(key string) {
 func (rw *SQLiteWriter) CloseArray(key string) {
 	rw.writeToArray = false
 
-	rw.buf = append(rw.buf, strings.Join(rw.array[key], `,`))
+	if err := rw.stmt.BindString(strings.Join(rw.array[key], `,`), rw.count); err != nil {
+		log.Fatal(err)
+	}
+
 	rw.count++
 
 	rw.array[key] = make([]string, 0)

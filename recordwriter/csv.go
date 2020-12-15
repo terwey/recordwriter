@@ -148,4 +148,6 @@ func (csv *CSVWriter) EOR(columns int) {
 	csv.count = 0
 }
 
-func (csv *CSVWriter) Close() {}
+func (csv *CSVWriter) Close() error {
+	return nil
+}
