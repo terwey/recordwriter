@@ -3,30 +3,22 @@
 
 package recordwriter
 
-/*
-// SQLite compilation options.
-#cgo CFLAGS: -DSQLITE_DEFAULT_PAGE_SIZE=32768
-#cgo CFLAGS: -DSQLITE_MAX_VARIABLE_NUMBER=1000000
-#cgo CFLAGS: -DSQLITE_DEFAULT_LOCKING_MODE=1
-#cgo CFLAGS: -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=0
-*/
-
 import (
 	"fmt"
 	"log"
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
-	"github.com/bvinc/go-sqlite-lite/sqlite3"
+	"github.com/productsupcom/go-sqlite-lite/sqlite3"
 )
 
 type SQLiteWriter struct {
 	conn             *sqlite3.Conn
 	stmt             *sqlite3.Stmt
 	header           []string
-	buf              []string
 	count            int
 	rowCount         int
 	size             int
@@ -62,9 +54,6 @@ func (rw *SQLiteWriter) WriteHeader(s string) {
 }
 
 func (rw *SQLiteWriter) FinalizeHeader() {
-	// for compatibility with the csv writer we need to reset the buf
-	// rw.buf = make([]interface{}, 0)
-	rw.buf = make([]string, 0)
 	var err error
 	err = rw.conn.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
 		strings.Join(rw.getCreateColumns(), `,`)))
@@ -93,10 +82,6 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatal(err)
 	}
 
-	// if err = rw.conn.Exec("PRAGMA automatic_index = 0"); err != nil {
-	// 	log.Fatal(err)
-	// }
-
 	err = rw.conn.BeginExclusive()
 	if err != nil {
 		log.Fatal(err)
@@ -115,7 +100,9 @@ func (rw *SQLiteWriter) Write(s string) {
 		return
 	}
 
-	rw.buf = append(rw.buf, s)
+	if err := rw.stmt.BindString(s, rw.count); err != nil {
+		log.Fatal(err)
+	}
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -123,7 +110,9 @@ func (rw *SQLiteWriter) Write(s string) {
 // WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	rw.buf = append(rw.buf, ByteSlice2String(s))
+	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
+		log.Fatal(err)
+	}
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -139,7 +128,9 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 	}
 
 	for _, s := range val {
-		rw.buf = append(rw.buf, s)
+		if err := rw.stmt.BindString(s, rw.count); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	rw.count++
@@ -153,7 +144,9 @@ func (rw *SQLiteWriter) Next() {
 func (rw *SQLiteWriter) Skip() {
 	if !rw.lastItemWasWrite {
 		// originally this wrote away a nil but the existing implementation writes an empty string
-		rw.buf = append(rw.buf, ``)
+		if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+			log.Fatal(err)
+		}
 		rw.count++
 	}
 	rw.lastItemWasWrite = false
@@ -164,22 +157,20 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	if rw.count < columns {
 		for rw.count < columns {
-			rw.buf = append(rw.buf, "")
+			if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+				log.Fatal(err)
+			}
 			rw.count++
 		}
 	}
 
-	// assume default is one
-	// err = rw.stmt.Exec(rw.buf...)
-	err = rw.stmt.ExecStrings(rw.buf...)
+	err = rw.stmt.ExecPrebound()
 
 	if err != nil {
 		rw.handleError(err)
 	}
 
-	// log.Printf("Checking to flush")
 	if rw.rowCount > rw.size {
-		// log.Printf("Flushing: %d, bulkCount: %d", rw.rowCount, rw.bulkCount)
 		if err = rw.conn.Commit(); err != nil {
 			log.Fatal(err)
 		}
@@ -191,9 +182,6 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		rw.rowCount = 0
 	}
 
-	// rw.buf = make([]interface{}, 0, len(rw.header))
-	rw.buf = make([]string, 0, len(rw.header))
-
 	rw.count = 0
 	rw.rowCount++
 }
@@ -203,8 +191,6 @@ func (rw *SQLiteWriter) handleError(err error) {
 	log.Printf("\n----------")
 	log.Printf("Failed importing to SQLite")
 	log.Printf("header (len: %d): \n----------\n%v", len(header), header)
-	log.Printf("data (len: %d): \n----------\n", len(rw.buf))
-	log.Printf("%s", rw.buf)
 	log.Printf("%s", err)
 	log.Printf("----------")
 	log.Printf("Query: \n%s", rw.GetQuery())
@@ -212,10 +198,11 @@ func (rw *SQLiteWriter) handleError(err error) {
 	log.Fatal("Ending")
 }
 
-func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
+func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
 	defer wg.Done()
 	opened := false
 	var err error
+	var start time.Time
 	for target := range ready {
 		if !opened {
 			rw.conn, err = sqlite3.Open(rw.path)
@@ -240,9 +227,9 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
 			}
 
 			opened = true
+			start = time.Now()
 		}
 
-		// target := fmt.Sprintf("%s.%d", rw.path, i)
 		err := rw.conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db2", target))
 		if err != nil {
 			log.Fatalf("Cannot attach (%s): %s", target, err)
@@ -270,6 +257,8 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup) {
 
 		os.Remove(target)
 	}
+
+	duration <- time.Since(start)
 
 	rw.conn.Close()
 }
@@ -318,7 +307,10 @@ func (rw *SQLiteWriter) BeginArray(key string) {
 func (rw *SQLiteWriter) CloseArray(key string) {
 	rw.writeToArray = false
 
-	rw.buf = append(rw.buf, strings.Join(rw.array[key], `,`))
+	if err := rw.stmt.BindString(strings.Join(rw.array[key], `,`), rw.count); err != nil {
+		log.Fatal(err)
+	}
+
 	rw.count++
 
 	rw.array[key] = make([]string, 0)
