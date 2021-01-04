@@ -27,12 +27,15 @@ type SQLiteWriter struct {
 	arrayKey         string
 	writeToArray     bool
 	path             string
+	merger           bool
+	mutex            *sync.Mutex
 }
 
-func NewSQLWriter(path string, size int) *SQLiteWriter {
+func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
+	rw.mutex = &sync.Mutex{}
 	rw.conn, err = sqlite3.Open(path)
 	if err != nil {
 		log.Fatal(err)
@@ -41,6 +44,7 @@ func NewSQLWriter(path string, size int) *SQLiteWriter {
 	rw.size = size
 	rw.array = make(map[string][]string)
 	rw.path = path
+	rw.merger = merger
 
 	return rw
 }
@@ -54,6 +58,7 @@ func (rw *SQLiteWriter) WriteHeader(s string) {
 }
 
 func (rw *SQLiteWriter) FinalizeHeader() {
+	rw.mutex.Lock()
 	var err error
 	err = rw.conn.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
 		strings.Join(rw.getCreateColumns(), `,`)))
@@ -61,31 +66,34 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatal(err)
 	}
 
-	rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
-	if err != nil {
-		log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
-	}
+	if !rw.merger {
+		rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
+		if err != nil {
+			log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
+		}
 
-	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
-		log.Fatal(err)
-	}
+		if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
+			log.Fatal(err)
+		}
 
-	if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
-		log.Fatal(err)
-	}
+		if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
+			log.Fatal(err)
+		}
 
-	if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
-		log.Fatal(err)
-	}
+		if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+			log.Fatal(err)
+		}
 
-	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
-		log.Fatal(err)
-	}
+		if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+			log.Fatal(err)
+		}
 
-	err = rw.conn.BeginExclusive()
-	if err != nil {
-		log.Fatal(err)
+		err = rw.conn.BeginExclusive()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
+	rw.mutex.Unlock()
 }
 
 func (rw *SQLiteWriter) GetQuery() string {
@@ -154,6 +162,7 @@ func (rw *SQLiteWriter) Skip() {
 
 func (rw *SQLiteWriter) EOR(columns int) {
 	var err error
+	rw.mutex.Lock()
 
 	if rw.count < columns {
 		for rw.count < columns {
@@ -184,6 +193,7 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 	rw.count = 0
 	rw.rowCount++
+	rw.mutex.Unlock()
 }
 
 func (rw *SQLiteWriter) handleError(err error) {
@@ -200,33 +210,11 @@ func (rw *SQLiteWriter) handleError(err error) {
 
 func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
 	defer wg.Done()
-	opened := false
-	var err error
+	started := false
 	var start time.Time
 	for target := range ready {
-		if !opened {
-			rw.conn, err = sqlite3.Open(rw.path)
-			if err != nil {
-				log.Fatalf("Cannot open for merging (%s): %s", rw.path, err)
-			}
-
-			if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
-				log.Fatal(err)
-			}
-
-			if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
-				log.Fatal(err)
-			}
-
-			if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
-				log.Fatal(err)
-			}
-
-			if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
-				log.Fatal(err)
-			}
-
-			opened = true
+		if !started {
+			started = true
 			start = time.Now()
 		}
 
@@ -247,7 +235,12 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 
 		err = rw.conn.Commit()
 		if err != nil {
-			log.Fatalf("Cannot commit: %s", err)
+			// we wait a few ms and then try again, if it fails again just exit
+			time.Sleep(5 * time.Millisecond)
+			err = rw.conn.Commit()
+			if err != nil {
+				log.Fatalf("Cannot commit for target (%s): %s", target, err)
+			}
 		}
 
 		err = rw.conn.Exec("DETACH DATABASE db2")
@@ -259,12 +252,11 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 	}
 
 	duration <- time.Since(start)
-
 	rw.conn.Close()
 }
 
 func (rw *SQLiteWriter) Close() error {
-	// flush out the remainder
+	rw.mutex.Lock()
 
 	if err := rw.conn.Commit(); err != nil {
 		return err
@@ -277,6 +269,8 @@ func (rw *SQLiteWriter) Close() error {
 	if err := rw.conn.Close(); err != nil {
 		return err
 	}
+
+	rw.mutex.Unlock()
 
 	return nil
 }
