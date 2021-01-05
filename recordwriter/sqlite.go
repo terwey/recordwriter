@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,17 +54,48 @@ func (rw *SQLiteWriter) GetPath() string {
 	return rw.path
 }
 
+func (rw *SQLiteWriter) cleanHeader() {
+	rw.mutex.Lock()
+	var buf []string
+	uniq := make(map[string]int)
+
+	// to keep compatibility with the previous header creation
+	// we need to iterate once over the header and keep track if the name appeared before
+	// if so, the second one to appear needs to have __2 appended, third __3 etc
+	for _, name := range rw.header {
+		if _, ok := uniq[strings.ToLower(name)]; ok {
+			uniq[strings.ToLower(name)]++
+		} else {
+			uniq[strings.ToLower(name)] = 1
+		}
+
+		// sqlite doesn't care about what characters appear inside a column name as long as it's quoted
+		if uniq[strings.ToLower(name)] > 1 {
+			buf = append(buf, strconv.Quote(fmt.Sprintf("%s__%d", name, uniq[strings.ToLower(name)])))
+		} else {
+			buf = append(buf, strconv.Quote(name))
+		}
+	}
+	rw.header = buf
+	rw.mutex.Unlock()
+}
+
 func (rw *SQLiteWriter) WriteHeader(s string) {
+	s = strings.ReplaceAll(s, "`", ``)
+	s = strings.ReplaceAll(s, `"`, ``)
+	s = strings.TrimSpace(s)
 	rw.header = append(rw.header, s)
 }
 
 func (rw *SQLiteWriter) FinalizeHeader() {
+	rw.cleanHeader()
 	rw.mutex.Lock()
 	var err error
-	err = rw.conn.Exec(fmt.Sprintf("CREATE TABLE data (%s)",
-		strings.Join(rw.getCreateColumns(), `,`)))
+	createQuery := fmt.Sprintf("CREATE TABLE data (%s)",
+		strings.Join(rw.getCreateColumns(), `,`))
+	err = rw.conn.Exec(createQuery)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Cannot create sqlite3 header, error: %s\nQuery: %s", err, createQuery)
 	}
 
 	if !rw.merger {
@@ -119,7 +151,7 @@ func (rw *SQLiteWriter) Write(s string) {
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
 	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
-		log.Fatal(err)
+		log.Fatalf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err)
 	}
 	rw.count++
 	rw.lastItemWasWrite = true
