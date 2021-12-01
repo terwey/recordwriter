@@ -3,6 +3,11 @@
 
 package recordwriter
 
+import (
+	"sync"
+	"time"
+)
+
 type RecordWriter interface {
 	// WriteHeader append the string to the header row
 	WriteHeader(s string)
@@ -22,4 +27,7 @@ type RecordWriter interface {
 	Close() error
 	BeginArray(key string)
 	CloseArray(key string)
+	WriteNull()
+
+	Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration)
 }

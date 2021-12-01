@@ -30,6 +30,21 @@ type SQLiteWriter struct {
 	path             string
 	merger           bool
 	mutex            *sync.Mutex
+	debugBuf         []interface{}
+}
+
+const debugLog = true
+
+func (rw *SQLiteWriter) appendToBuf(val interface{}) {
+	if debugLog {
+		rw.debugBuf = append(rw.debugBuf, val)
+	}
+}
+
+func debug(format string, i ...interface{}) {
+	if debugLog {
+		fmt.Fprintf(os.Stderr, "rw.sqlite: "+format+"\n", i...)
+	}
 }
 
 func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
@@ -98,26 +113,26 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatalf("Cannot create sqlite3 header, error: %s\nQuery: %s", err, createQuery)
 	}
 
+	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+		log.Fatal(err)
+	}
+
 	if !rw.merger {
 		rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
 		if err != nil {
 			log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
-		}
-
-		if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
-			log.Fatal(err)
-		}
-
-		if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
-			log.Fatal(err)
-		}
-
-		if err = rw.conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
-			log.Fatal(err)
-		}
-
-		if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
-			log.Fatal(err)
 		}
 
 		err = rw.conn.BeginExclusive()
@@ -125,6 +140,7 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 			log.Fatal(err)
 		}
 	}
+
 	rw.mutex.Unlock()
 }
 
@@ -135,14 +151,28 @@ func (rw *SQLiteWriter) GetQuery() string {
 }
 
 func (rw *SQLiteWriter) Write(s string) {
+	if debugLog {
+		debug("arr: %v, val: %s\n", rw.writeToArray, s)
+	}
 	if rw.writeToArray {
 		rw.array[rw.arrayKey] = append(rw.array[rw.arrayKey], s)
 		return
 	}
 
-	if err := rw.stmt.BindString(s, rw.count); err != nil {
-		log.Fatal(err)
+	if debugLog {
+		if len(rw.header) > rw.count {
+			debug("Writing to %s = %s", rw.header[rw.count], s)
+		} else {
+			debug("Overflowing %d = %s", rw.count, s)
+		}
 	}
+
+	if err := rw.stmt.BindString(s, rw.count); err != nil {
+		fmt.Fprintf(os.Stderr, "header (%d): \n%v\n\n", len(rw.header), rw.header)
+		fmt.Fprintf(os.Stderr, "writing: %s to %d", s, rw.count)
+		rw.handleError(err)
+	}
+	rw.appendToBuf(s)
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -150,9 +180,20 @@ func (rw *SQLiteWriter) Write(s string) {
 // WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
-		log.Fatalf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err)
+	if debugLog {
+		if len(rw.header) > rw.count {
+			debug("Writing to %s = %s", rw.header[rw.count], s)
+		} else {
+			debug("Overflowing %d = %s", rw.count, s)
+		}
 	}
+
+	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
+		rw.handleError(err)
+		// log.Printf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err)
+		// panic(fmt.Sprintf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err))
+	}
+	rw.appendToBuf(s)
 	rw.count++
 	rw.lastItemWasWrite = true
 }
@@ -178,15 +219,58 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 }
 
 func (rw *SQLiteWriter) Next() {
+	if debugLog {
+		debug("Next")
+	}
 	rw.lastItemWasWrite = false
 }
 
-func (rw *SQLiteWriter) Skip() {
-	if !rw.lastItemWasWrite {
-		// originally this wrote away a nil but the existing implementation writes an empty string
-		if err := rw.stmt.BindEmptyString(rw.count); err != nil {
-			log.Fatal(err)
+func (rw *SQLiteWriter) WriteNull() {
+	if debugLog {
+		debug("WriteNull")
+	}
+	if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+		if debugLog {
+			if len(rw.header) > rw.count {
+				debug("Skipping for %s", rw.header[rw.count])
+			} else {
+				debug("Overflowing skip %d", rw.count)
+			}
 		}
+		rw.handleError(err)
+	}
+	rw.appendToBuf(nil)
+	rw.count++
+	rw.lastItemWasWrite = true
+}
+
+func (rw *SQLiteWriter) Skip() {
+	if debugLog {
+		if len(rw.header) > rw.count {
+			debug("Skip called for %s", rw.header[rw.count])
+		} else {
+			debug("Skip called for overflowing skip %d", rw.count)
+		}
+	}
+	if !rw.lastItemWasWrite {
+		if debugLog {
+			if len(rw.header) > rw.count {
+				debug("Skipping REALLY for %s", rw.header[rw.count])
+			} else {
+				debug("Overflowing REALLY skip %d", rw.count)
+			}
+		}
+
+		if err := rw.stmt.BindNull(rw.count); err != nil {
+			rw.handleError(err)
+		}
+
+		// originally this wrote away a nil but the existing implementation writes an empty string
+		// if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+		// 	rw.handleError(err)
+		// 	// log.Fatal(err)
+		// }
+		rw.appendToBuf(nil)
 		rw.count++
 	}
 	rw.lastItemWasWrite = false
@@ -223,21 +307,42 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		rw.rowCount = 0
 	}
 
+	if debugLog {
+		rw.debugBuf = make([]interface{}, 0)
+	}
 	rw.count = 0
 	rw.rowCount++
 	rw.mutex.Unlock()
 }
 
 func (rw *SQLiteWriter) handleError(err error) {
-	header := rw.getCreateColumns()
+	// header := rw.getCreateColumns()
 	log.Printf("\n----------")
 	log.Printf("Failed importing to SQLite")
-	log.Printf("header (len: %d): \n----------\n%v", len(header), header)
+	log.Printf("header (len: %d): \n----------\n%v", len(rw.header), rw.header)
 	log.Printf("%s", err)
 	log.Printf("----------")
-	log.Printf("Query: \n%s", rw.GetQuery())
-	log.Printf("----------")
+	if len(rw.debugBuf) != 0 {
+		log.Printf("Data in buffer: \n")
+		for i, s := range rw.debugBuf {
+			if len(rw.header) > i {
+				if data, ok := s.([]uint8); ok {
+					log.Printf("%s (%d): %s\n", rw.header[i], i, data)
+				} else {
+					log.Printf("%s (%d): %v\n", rw.header[i], i, s)
+				}
+			} else {
+				if data, ok := s.([]uint8); ok {
+					log.Printf("%d: %s\n", i, data)
+				} else {
+					log.Printf("%d: %v\n", i, s)
+				}
+			}
+		}
+		log.Printf("----------")
+	}
 	log.Fatal("Ending")
+	panic("Failed to process SQLite writer")
 }
 
 func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
@@ -327,10 +432,20 @@ func (rw *SQLiteWriter) getQuestionmarks() []string {
 }
 
 func (rw *SQLiteWriter) BeginArray(key string) {
+	if key == `` {
+		panic("BeginArray Key cannot be empty")
+	}
+	fmt.Fprintf(os.Stderr, "BeginArray %s\n", key)
 	rw.arrayKey = key
 	rw.writeToArray = true
 }
 func (rw *SQLiteWriter) CloseArray(key string) {
+	if key == `` {
+		panic("CloseArray Key cannot be empty")
+	}
+	if debugLog {
+		debug("CloseArray (%s): %s\n", key, strings.Join(rw.array[key], `,`))
+	}
 	rw.writeToArray = false
 
 	if err := rw.stmt.BindString(strings.Join(rw.array[key], `,`), rw.count); err != nil {

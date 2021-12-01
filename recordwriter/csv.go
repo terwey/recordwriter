@@ -6,6 +6,8 @@ package recordwriter
 import (
 	"io"
 	"strings"
+	"sync"
+	"time"
 )
 
 type CSVWriter struct {
@@ -129,6 +131,15 @@ func (csv *CSVWriter) Skip() {
 	csv.lastItemWasWrite = false
 }
 
+func (csv *CSVWriter) WriteNull() {
+	csv.count++
+	csv.lastItemWasWrite = true
+	if csv.quoteAll {
+		csv.w.WriteString(csv.quote)
+		csv.w.WriteString(csv.quote)
+	}
+}
+
 func (csv *CSVWriter) FinalizeHeader() {
 	csv.EOR(csv.count)
 }
@@ -150,4 +161,18 @@ func (csv *CSVWriter) EOR(columns int) {
 
 func (csv *CSVWriter) Close() error {
 	return nil
+}
+
+// TODO: dummy method
+func (csv *CSVWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
+	defer wg.Done()
+	started := false
+	var start time.Time
+	for range ready {
+		if !started {
+			started = true
+			start = time.Now()
+		}
+	}
+	duration <- time.Since(start)
 }
