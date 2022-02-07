@@ -33,16 +33,14 @@ type SQLiteWriter struct {
 	debugBuf         []interface{}
 }
 
-const debugLog = true
-
 func (rw *SQLiteWriter) appendToBuf(val interface{}) {
-	if debugLog {
+	if DebugLog {
 		rw.debugBuf = append(rw.debugBuf, val)
 	}
 }
 
 func debug(format string, i ...interface{}) {
-	if debugLog {
+	if DebugLog {
 		fmt.Fprintf(os.Stderr, "rw.sqlite: "+format+"\n", i...)
 	}
 }
@@ -151,7 +149,7 @@ func (rw *SQLiteWriter) GetQuery() string {
 }
 
 func (rw *SQLiteWriter) Write(s string) {
-	if debugLog {
+	if DebugLog {
 		debug("arr: %v, val: %s\n", rw.writeToArray, s)
 	}
 	if rw.writeToArray {
@@ -159,7 +157,7 @@ func (rw *SQLiteWriter) Write(s string) {
 		return
 	}
 
-	if debugLog {
+	if DebugLog {
 		if len(rw.header) > rw.count {
 			debug("Writing to %s = %s", rw.header[rw.count], s)
 		} else {
@@ -180,7 +178,7 @@ func (rw *SQLiteWriter) Write(s string) {
 // WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	if debugLog {
+	if DebugLog {
 		if len(rw.header) > rw.count {
 			debug("Writing to %s = %s", rw.header[rw.count], s)
 		} else {
@@ -219,18 +217,18 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 }
 
 func (rw *SQLiteWriter) Next() {
-	if debugLog {
+	if DebugLog {
 		debug("Next")
 	}
 	rw.lastItemWasWrite = false
 }
 
 func (rw *SQLiteWriter) WriteNull() {
-	if debugLog {
+	if DebugLog {
 		debug("WriteNull")
 	}
 	if err := rw.stmt.BindEmptyString(rw.count); err != nil {
-		if debugLog {
+		if DebugLog {
 			if len(rw.header) > rw.count {
 				debug("Skipping for %s", rw.header[rw.count])
 			} else {
@@ -245,7 +243,7 @@ func (rw *SQLiteWriter) WriteNull() {
 }
 
 func (rw *SQLiteWriter) Skip() {
-	if debugLog {
+	if DebugLog {
 		if len(rw.header) > rw.count {
 			debug("Skip called for %s", rw.header[rw.count])
 		} else {
@@ -253,7 +251,7 @@ func (rw *SQLiteWriter) Skip() {
 		}
 	}
 	if !rw.lastItemWasWrite {
-		if debugLog {
+		if DebugLog {
 			if len(rw.header) > rw.count {
 				debug("Skipping REALLY for %s", rw.header[rw.count])
 			} else {
@@ -307,7 +305,7 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		rw.rowCount = 0
 	}
 
-	if debugLog {
+	if DebugLog {
 		rw.debugBuf = make([]interface{}, 0)
 	}
 	rw.count = 0
@@ -443,7 +441,7 @@ func (rw *SQLiteWriter) CloseArray(key string) {
 	if key == `` {
 		panic("CloseArray Key cannot be empty")
 	}
-	if debugLog {
+	if DebugLog {
 		debug("CloseArray (%s): %s\n", key, strings.Join(rw.array[key], `,`))
 	}
 	rw.writeToArray = false

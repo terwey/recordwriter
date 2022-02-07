@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+var (
+	DebugLog = false
+)
+
 type RecordWriter interface {
 	// WriteHeader append the string to the header row
 	WriteHeader(s string)
