@@ -39,12 +39,6 @@ func (rw *SQLiteWriter) appendToBuf(val interface{}) {
 	}
 }
 
-func debug(format string, i ...interface{}) {
-	if DebugLog {
-		fmt.Fprintf(os.Stderr, "rw.sqlite: "+format+"\n", i...)
-	}
-}
-
 func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
@@ -157,11 +151,13 @@ func (rw *SQLiteWriter) Write(s string) {
 		return
 	}
 
-	if DebugLog {
-		if len(rw.header) > rw.count {
-			debug("Writing to %s = %s", rw.header[rw.count], s)
-		} else {
+	if len(rw.header) > rw.count {
+		debug("Writing to %s = %s", rw.header[rw.count], s)
+	} else {
+		if Overflow {
 			debug("Overflowing %d = %s", rw.count, s)
+		} else {
+			return
 		}
 	}
 
@@ -178,11 +174,14 @@ func (rw *SQLiteWriter) Write(s string) {
 // WriteByte uses an unsafe.Pointer method to return the incoming []byte as a string
 // beware: could eat your dog
 func (rw *SQLiteWriter) WriteByte(s []byte) {
-	if DebugLog {
-		if len(rw.header) > rw.count {
-			debug("Writing to %s = %s", rw.header[rw.count], s)
-		} else {
+
+	if len(rw.header) > rw.count {
+		debug("Writing to %s = %s", rw.header[rw.count], s)
+	} else {
+		if Overflow {
 			debug("Overflowing %d = %s", rw.count, s)
+		} else {
+			return
 		}
 	}
 
@@ -228,11 +227,13 @@ func (rw *SQLiteWriter) WriteNull() {
 		debug("WriteNull")
 	}
 	if err := rw.stmt.BindEmptyString(rw.count); err != nil {
-		if DebugLog {
-			if len(rw.header) > rw.count {
-				debug("Skipping for %s", rw.header[rw.count])
-			} else {
+		if len(rw.header) > rw.count {
+			debug("Skipping for %s", rw.header[rw.count])
+		} else {
+			if Overflow {
 				debug("Overflowing skip %d", rw.count)
+			} else {
+				return
 			}
 		}
 		rw.handleError(err)
@@ -251,11 +252,13 @@ func (rw *SQLiteWriter) Skip() {
 		}
 	}
 	if !rw.lastItemWasWrite {
-		if DebugLog {
-			if len(rw.header) > rw.count {
-				debug("Skipping REALLY for %s", rw.header[rw.count])
-			} else {
+		if len(rw.header) > rw.count {
+			debug("Skipping REALLY for %s", rw.header[rw.count])
+		} else {
+			if Overflow {
 				debug("Overflowing REALLY skip %d", rw.count)
+			} else {
+				return
 			}
 		}
 
@@ -315,31 +318,31 @@ func (rw *SQLiteWriter) EOR(columns int) {
 
 func (rw *SQLiteWriter) handleError(err error) {
 	// header := rw.getCreateColumns()
-	log.Printf("\n----------")
-	log.Printf("Failed importing to SQLite")
-	log.Printf("header (len: %d): \n----------\n%v", len(rw.header), rw.header)
-	log.Printf("%s", err)
-	log.Printf("----------")
+	print("\n----------")
+	print("Failed importing to SQLite")
+	print("header (len: %d): \n----------\n%v", len(rw.header), rw.header)
+	print("%s", err)
+	print("----------")
 	if len(rw.debugBuf) != 0 {
-		log.Printf("Data in buffer: \n")
+		print("Data in buffer:")
 		for i, s := range rw.debugBuf {
 			if len(rw.header) > i {
 				if data, ok := s.([]uint8); ok {
-					log.Printf("%s (%d): %s\n", rw.header[i], i, data)
+					print("%s (%d): %s", rw.header[i], i, data)
 				} else {
-					log.Printf("%s (%d): %v\n", rw.header[i], i, s)
+					print("%s (%d): %v", rw.header[i], i, s)
 				}
 			} else {
 				if data, ok := s.([]uint8); ok {
-					log.Printf("%d: %s\n", i, data)
+					print("%d: %s", i, data)
 				} else {
-					log.Printf("%d: %v\n", i, s)
+					print("%d: %v", i, s)
 				}
 			}
 		}
-		log.Printf("----------")
+		print("----------")
 	}
-	log.Fatal("Ending")
+	print("Ending")
 	panic("Failed to process SQLite writer")
 }
 
