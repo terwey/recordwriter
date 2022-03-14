@@ -15,12 +15,6 @@ var (
 	Overflow = false
 )
 
-func debug(format string, i ...interface{}) {
-	if DebugLog {
-		fmt.Fprintf(os.Stderr, "recordwriter (debug): "+format+"\n", i...)
-	}
-}
-
 func print(format string, i ...interface{}) {
 	fmt.Fprintf(os.Stderr, "recordwriter: "+format+"\n", i...)
 }

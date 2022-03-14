@@ -33,12 +33,6 @@ type SQLiteWriter struct {
 	debugBuf         []interface{}
 }
 
-func (rw *SQLiteWriter) appendToBuf(val interface{}) {
-	if DebugLog {
-		rw.debugBuf = append(rw.debugBuf, val)
-	}
-}
-
 func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
@@ -143,9 +137,7 @@ func (rw *SQLiteWriter) GetQuery() string {
 }
 
 func (rw *SQLiteWriter) Write(s string) {
-	if DebugLog {
-		debug("arr: %v, val: %s\n", rw.writeToArray, s)
-	}
+	debug("arr: %v, val: %s\n", rw.writeToArray, s)
 	if rw.writeToArray {
 		rw.array[rw.arrayKey] = append(rw.array[rw.arrayKey], s)
 		return
@@ -216,16 +208,12 @@ func (rw *SQLiteWriter) WriteSlice(val []string) {
 }
 
 func (rw *SQLiteWriter) Next() {
-	if DebugLog {
-		debug("Next")
-	}
+	debug("Next")
 	rw.lastItemWasWrite = false
 }
 
 func (rw *SQLiteWriter) WriteNull() {
-	if DebugLog {
-		debug("WriteNull")
-	}
+	debug("WriteNull")
 	if err := rw.stmt.BindEmptyString(rw.count); err != nil {
 		if len(rw.header) > rw.count {
 			debug("Skipping for %s", rw.header[rw.count])
@@ -244,12 +232,10 @@ func (rw *SQLiteWriter) WriteNull() {
 }
 
 func (rw *SQLiteWriter) Skip() {
-	if DebugLog {
-		if len(rw.header) > rw.count {
-			debug("Skip called for %s", rw.header[rw.count])
-		} else {
-			debug("Skip called for overflowing skip %d", rw.count)
-		}
+	if len(rw.header) > rw.count {
+		debug("Skip called for %s", rw.header[rw.count])
+	} else {
+		debug("Skip called for overflowing skip %d", rw.count)
 	}
 	if !rw.lastItemWasWrite {
 		if len(rw.header) > rw.count {
@@ -308,9 +294,7 @@ func (rw *SQLiteWriter) EOR(columns int) {
 		rw.rowCount = 0
 	}
 
-	if DebugLog {
-		rw.debugBuf = make([]interface{}, 0)
-	}
+	rw.debugBuf = make([]interface{}, 0)
 	rw.count = 0
 	rw.rowCount++
 	rw.mutex.Unlock()
@@ -444,9 +428,7 @@ func (rw *SQLiteWriter) CloseArray(key string) {
 	if key == `` {
 		panic("CloseArray Key cannot be empty")
 	}
-	if DebugLog {
-		debug("CloseArray (%s): %s\n", key, strings.Join(rw.array[key], `,`))
-	}
+	debug("CloseArray (%s): %s\n", key, strings.Join(rw.array[key], `,`))
 	rw.writeToArray = false
 
 	if err := rw.stmt.BindString(strings.Join(rw.array[key], `,`), rw.count); err != nil {
