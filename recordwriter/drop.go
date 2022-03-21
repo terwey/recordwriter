@@ -56,3 +56,11 @@ func (d *DropWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration cha
 	}
 	duration <- time.Since(start)
 }
+
+func (d *DropWriter) Multibyte(out []byte, pos []uint32, columns int) {
+	panic("not yet implemented")
+}
+
+func (d *DropWriter) EORMulti() {
+	panic("not yet implemented")
+}

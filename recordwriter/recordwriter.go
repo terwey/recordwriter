@@ -35,10 +35,12 @@ type RecordWriter interface {
 	Skip()
 	// EOR finalizes the row
 	EOR(columns int)
+	EORMulti()
 	Close() error
 	BeginArray(key string)
 	CloseArray(key string)
 	WriteNull()
+	Multibyte(out []byte, pos []uint32, columns int)
 
 	Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration)
 }

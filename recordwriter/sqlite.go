@@ -116,7 +116,7 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 	}
 
 	if !rw.merger {
-		rw.stmt, err = rw.conn.Prepare(rw.GetQuery())
+		rw.stmt, err = rw.conn.PreparePersistent(rw.GetQuery())
 		if err != nil {
 			log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
 		}
@@ -134,6 +134,18 @@ func (rw *SQLiteWriter) GetQuery() string {
 	return fmt.Sprintf("INSERT INTO data (%s) VALUES (%s)",
 		strings.Join(rw.header, `,`),
 		strings.Join(rw.getQuestionmarks(), `,`))
+}
+
+// Multibyte is a highly optimized call, it also internally already calls ExecPrebound
+// Must be used in conjunction with EORMulti()
+func (rw *SQLiteWriter) Multibyte(out []byte, pos []uint32, columns int) {
+	if err := rw.stmt.BindMultibytes(out, pos, len(pos), columns); err != nil {
+		rw.handleError(err)
+	}
+
+	rw.mutex.Lock()
+	rw.count = len(pos)
+	rw.mutex.Unlock()
 }
 
 func (rw *SQLiteWriter) Write(s string) {
@@ -177,10 +189,8 @@ func (rw *SQLiteWriter) WriteByte(s []byte) {
 		}
 	}
 
-	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
+	if err := rw.stmt.BindBytes(s, rw.count); err != nil {
 		rw.handleError(err)
-		// log.Printf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err)
-		// panic(fmt.Sprintf("SQLiteWriter cannot WriteByte (count: %d): %s\nError: %s", rw.count, s, err))
 	}
 	rw.appendToBuf(s)
 	rw.count++
@@ -281,6 +291,28 @@ func (rw *SQLiteWriter) EOR(columns int) {
 	if err != nil {
 		rw.handleError(err)
 	}
+
+	if rw.rowCount > rw.size {
+		if err = rw.conn.Commit(); err != nil {
+			log.Fatal(err)
+		}
+		err = rw.conn.BeginExclusive()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		rw.rowCount = 0
+	}
+
+	rw.debugBuf = make([]interface{}, 0)
+	rw.count = 0
+	rw.rowCount++
+	rw.mutex.Unlock()
+}
+
+func (rw *SQLiteWriter) EORMulti() {
+	var err error
+	rw.mutex.Lock()
 
 	if rw.rowCount > rw.size {
 		if err = rw.conn.Commit(); err != nil {
