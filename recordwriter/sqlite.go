@@ -5,6 +5,7 @@ package recordwriter
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log"
 	"os"
 	"strconv"
@@ -99,10 +100,6 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatalf("Cannot create sqlite3 header, error: %s\nQuery: %s", err, createQuery)
 	}
 
-	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
-		log.Fatal(err)
-	}
-
 	if err = rw.conn.Exec("PRAGMA synchronous = 0"); err != nil {
 		log.Fatal(err)
 	}
@@ -111,11 +108,29 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 		log.Fatal(err)
 	}
 
-	if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+	// if err = rw.conn.Exec("PRAGMA cache_size=-1024000000"); err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	if err = rw.conn.Exec("PRAGMA locking_mode = EXCLUSIVE"); err != nil {
 		log.Fatal(err)
 	}
 
+	if rw.merger {
+		if err = rw.conn.Exec("PRAGMA journal_mode = WAL2"); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	if !rw.merger {
+		if err = rw.conn.Exec("PRAGMA journal_mode = OFF"); err != nil {
+			log.Fatal(err)
+		}
+
+		if err = rw.conn.Exec("PRAGMA temp_store = MEMORY;"); err != nil {
+			log.Fatal(err)
+		}
+
 		rw.stmt, err = rw.conn.PreparePersistent(rw.GetQuery())
 		if err != nil {
 			log.Fatalf("sqlite cannot prepare query, error: %s\nquery: %s", err, rw.GetQuery())
@@ -364,46 +379,78 @@ func (rw *SQLiteWriter) handleError(err error) {
 
 func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
 	defer wg.Done()
+
 	started := false
 	var start time.Time
+	var mergeWg sync.WaitGroup
 	for target := range ready {
 		if !started {
 			started = true
 			start = time.Now()
 		}
 
-		err := rw.conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db2", target))
-		if err != nil {
-			log.Fatalf("Cannot attach (%s): %s", target, err)
-		}
-
-		err = rw.conn.BeginExclusive()
-		if err != nil {
-			log.Fatalf("Cannot begin: %s", err)
-		}
-
-		err = rw.conn.Exec("INSERT INTO main.data SELECT * FROM db2.data")
-		if err != nil {
-			log.Fatalf("Cannot insert (%s): %s", target, err)
-		}
-
-		err = rw.conn.Commit()
-		if err != nil {
-			// we wait a few ms and then try again, if it fails again just exit
-			time.Sleep(5 * time.Millisecond)
-			err = rw.conn.Commit()
+		mergeWg.Add(1)
+		go func(src string, target string, w *sync.WaitGroup) {
+			defer w.Done()
+			conn, err := sqlite3.Open(src)
 			if err != nil {
-				log.Fatalf("Cannot commit for target (%s): %s", target, err)
+				log.Fatalf("Cannot open (%s): %s", src, err)
 			}
-		}
 
-		err = rw.conn.Exec("DETACH DATABASE db2")
-		if err != nil {
-			log.Fatalf("Cannot detach (%s): %s", target, err)
-		}
+			// always return true
+			conn.BusyFunc(func(count int) (retry bool) {
+				return true
+			})
+			if err = conn.Exec("PRAGMA journal_mode = WAL2"); err != nil {
+				log.Fatal(err)
+			}
+			if err = conn.Exec("PRAGMA synchronous = 0"); err != nil {
+				log.Fatal(err)
+			}
+			if err = conn.Exec("PRAGMA mmap_size=468435456"); err != nil {
+				log.Fatal(err)
+			}
 
-		os.Remove(target)
+			h := fnv.New32a()
+			h.Write([]byte(target))
+
+			err = conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db%d", target, h.Sum32()))
+			if err != nil {
+				log.Fatalf("Cannot attach (%s): %s", target, err)
+			}
+
+			err = conn.BeginExclusive()
+			if err != nil {
+				log.Fatalf("Cannot begin: %s", err)
+			}
+
+			err = conn.Exec(fmt.Sprintf("INSERT INTO main.data SELECT * FROM db%d.data", h.Sum32()))
+			if err != nil {
+				log.Fatalf("Cannot insert (%s): %s", target, err)
+			}
+
+			err = conn.Commit()
+			if err != nil {
+				// we wait a few ms and then try again, if it fails again just exit
+				time.Sleep(5 * time.Millisecond)
+				log.Printf("commit after sleep: %s", target)
+				err = conn.Commit()
+				if err != nil {
+					log.Fatalf("Cannot commit for target (%s): %s", target, err)
+				}
+			}
+
+			err = conn.Exec(fmt.Sprintf("DETACH DATABASE db%d", h.Sum32()))
+			if err != nil {
+				log.Fatalf("Cannot detach (%s): %s", target, err)
+			}
+
+			os.Remove(target)
+			err = conn.Close()
+		}(rw.path, target, &mergeWg)
 	}
+
+	mergeWg.Wait()
 
 	duration <- time.Since(start)
 	rw.conn.Close()
@@ -411,6 +458,7 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 
 func (rw *SQLiteWriter) Close() error {
 	rw.mutex.Lock()
+	defer rw.mutex.Unlock()
 
 	if err := rw.conn.Commit(); err != nil {
 		return err
@@ -423,8 +471,6 @@ func (rw *SQLiteWriter) Close() error {
 	if err := rw.conn.Close(); err != nil {
 		return err
 	}
-
-	rw.mutex.Unlock()
 
 	return nil
 }
