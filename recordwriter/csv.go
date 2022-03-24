@@ -176,3 +176,11 @@ func (csv *CSVWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration ch
 	}
 	duration <- time.Since(start)
 }
+
+func (csv *CSVWriter) Multibyte(out []byte, pos []uint32, columns int) {
+	panic("not yet implemented")
+}
+
+func (csv *CSVWriter) EORMulti() {
+	panic("not yet implemented")
+}
