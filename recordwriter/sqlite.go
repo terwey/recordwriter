@@ -32,9 +32,10 @@ type SQLiteWriter struct {
 	merger           bool
 	mutex            *sync.Mutex
 	debugBuf         []interface{}
+	rowid            bool
 }
 
-func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
+func NewSQLWriter(path string, size int, merger bool, rowid bool) *SQLiteWriter {
 	var err error
 	rw := &SQLiteWriter{}
 	os.Remove(path)
@@ -48,6 +49,7 @@ func NewSQLWriter(path string, size int, merger bool) *SQLiteWriter {
 	rw.array = make(map[string][]string)
 	rw.path = path
 	rw.merger = merger
+	rw.rowid = rowid
 
 	return rw
 }
@@ -380,6 +382,7 @@ func (rw *SQLiteWriter) handleError(err error) {
 func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
 	defer wg.Done()
 
+	var columnNames []string
 	started := false
 	var start time.Time
 	var mergeWg sync.WaitGroup
@@ -411,6 +414,13 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 				log.Fatal(err)
 			}
 
+			if rw.rowid && len(columnNames) == 0 {
+				columnNames, err = ColumnsForDB("data", conn)
+				if err != nil {
+					log.Fatalf("Cannot get ColumnsForDB: %s", err)
+				}
+			}
+
 			h := fnv.New32a()
 			h.Write([]byte(target))
 
@@ -424,9 +434,16 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 				log.Fatalf("Cannot begin: %s", err)
 			}
 
-			err = conn.Exec(fmt.Sprintf("INSERT INTO main.data SELECT * FROM db%d.data", h.Sum32()))
-			if err != nil {
-				log.Fatalf("Cannot insert (%s): %s", target, err)
+			if rw.rowid {
+				err = conn.Exec(fmt.Sprintf("INSERT INTO main.data (rowid, %s) SELECT rowid,* FROM db%d.data", strings.Join(columnNames, ","), h.Sum32()))
+				if err != nil {
+					log.Fatalf("Merger: Cannot insert (%s): %s", target, err)
+				}
+			} else {
+				err = conn.Exec(fmt.Sprintf("INSERT INTO main.data SELECT * FROM db%d.data", h.Sum32()))
+				if err != nil {
+					log.Fatalf("Merger: Cannot insert (%s): %s", target, err)
+				}
 			}
 
 			err = conn.Commit()
@@ -456,6 +473,42 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 	rw.conn.Close()
 }
 
+func ColumnsForDB(name string, conn *sqlite3.Conn) ([]string, error) {
+	stmt, err := conn.Prepare("select name from pragma_table_info('" + name + "') order by name;")
+	if err != nil {
+		return nil, err
+	}
+
+	defer stmt.Close()
+
+	var names []string
+
+	for {
+		hasRow, err := stmt.Step()
+		if err != nil {
+			return nil, err
+		}
+		if !hasRow {
+			break
+		}
+
+		var name string
+		err = stmt.Scan(&name)
+		if err != nil {
+			return nil, err
+		}
+
+		// we don't want to explicitly select for rowid
+		if name == "rowid" {
+			continue
+		}
+
+		names = append(names, `"`+name+`"`)
+	}
+
+	return names, nil
+}
+
 func (rw *SQLiteWriter) Close() error {
 	rw.mutex.Lock()
 	defer rw.mutex.Unlock()
@@ -479,6 +532,9 @@ func (rw *SQLiteWriter) getCreateColumns() []string {
 	var buf []string
 
 	for _, v := range rw.header {
+		if v == "rowid" {
+			continue
+		}
 		buf = append(buf, v+` TEXT`)
 	}
 	return buf
