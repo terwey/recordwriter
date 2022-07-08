@@ -435,7 +435,7 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 			}
 
 			if rw.rowid {
-				err = conn.Exec(fmt.Sprintf("INSERT INTO main.data (rowid, %s) SELECT rowid,* FROM db%d.data", strings.Join(columnNames, ","), h.Sum32()))
+				err = conn.Exec(fmt.Sprintf("INSERT INTO main.data (rowid, %s) SELECT rowid, %s FROM db%d.data", strings.Join(columnNames, ","), strings.Join(columnNames, ","), h.Sum32()))
 				if err != nil {
 					log.Fatalf("Merger: Cannot insert (%s): %s", target, err)
 				}
