@@ -532,11 +532,12 @@ func (rw *SQLiteWriter) getCreateColumns() []string {
 	var buf []string
 
 	for _, v := range rw.header {
-		if v == "rowid" {
+		if v == `"rowid"` {
 			continue
 		}
 		buf = append(buf, v+` TEXT`)
 	}
+
 	return buf
 }
 
