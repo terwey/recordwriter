@@ -33,6 +33,8 @@ type SQLiteWriter struct {
 	mutex            *sync.Mutex
 	debugBuf         []interface{}
 	rowid            bool
+
+	processedHeaderSet bool
 }
 
 func NewSQLWriter(path string, size int, merger bool, rowid bool) *SQLiteWriter {
@@ -85,14 +87,25 @@ func (rw *SQLiteWriter) cleanHeader() {
 }
 
 func (rw *SQLiteWriter) WriteHeader(s string) {
+	if rw.processedHeaderSet {
+		return
+	}
 	s = strings.ReplaceAll(s, "`", ``)
 	s = strings.ReplaceAll(s, `"`, ``)
 	s = strings.TrimSpace(s)
 	rw.header = append(rw.header, s)
 }
 
-func (rw *SQLiteWriter) FinalizeHeader() {
-	rw.cleanHeader()
+// SetProcessedHeader expects a fully finalized Header including quotations for SQLite
+func (rw *SQLiteWriter) SetProcessedHeader(header []string) {
+	rw.header = header
+	rw.processedHeaderSet = true
+}
+
+func (rw *SQLiteWriter) FinalizeHeader() []string {
+	if !rw.processedHeaderSet {
+		rw.cleanHeader()
+	}
 	rw.mutex.Lock()
 	var err error
 	createQuery := fmt.Sprintf("CREATE TABLE data (%s)",
@@ -145,6 +158,8 @@ func (rw *SQLiteWriter) FinalizeHeader() {
 	}
 
 	rw.mutex.Unlock()
+
+	return rw.header
 }
 
 func (rw *SQLiteWriter) GetQuery() string {

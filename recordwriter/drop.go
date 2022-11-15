@@ -19,7 +19,9 @@ func (d *DropWriter) WriteHeader(s string) {
 }
 
 // FinalizeHeader signals the last header item has been set
-func (d *DropWriter) FinalizeHeader() {}
+func (d *DropWriter) FinalizeHeader() []string {
+	return nil
+}
 
 // Write append the string as a column to the row
 func (d *DropWriter) Write(s string) {}

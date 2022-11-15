@@ -20,6 +20,8 @@ type CSVWriter struct {
 	array            map[string][]string
 	arrayKey         string
 	writeToArray     bool
+
+	finalizedHeader []string
 }
 
 func NewCSVWriter(w io.StringWriter) *CSVWriter {
@@ -93,6 +95,7 @@ func (csv *CSVWriter) WriteHeader(s string) {
 	csv.Write(s)
 	csv.count++
 	csv.lastItemWasWrite = true
+	csv.finalizedHeader = append(csv.finalizedHeader, s)
 }
 
 func (csv *CSVWriter) BeginArray(key string) {
@@ -140,8 +143,9 @@ func (csv *CSVWriter) WriteNull() {
 	}
 }
 
-func (csv *CSVWriter) FinalizeHeader() {
+func (csv *CSVWriter) FinalizeHeader() []string {
 	csv.EOR(csv.count)
+	return csv.finalizedHeader
 }
 
 func (csv *CSVWriter) EOR(columns int) {

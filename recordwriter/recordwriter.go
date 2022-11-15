@@ -23,7 +23,7 @@ type RecordWriter interface {
 	// WriteHeader append the string to the header row
 	WriteHeader(s string)
 	// FinalizeHeader signals the last header item has been set
-	FinalizeHeader()
+	FinalizeHeader() []string
 	// Write append the string as a column to the row
 	Write(s string)
 	// WriteByte append the bytes as a column to the row
