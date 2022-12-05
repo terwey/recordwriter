@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unsafe"
 
 	"github.com/productsupcom/go-sqlite-lite/sqlite3"
@@ -69,6 +70,14 @@ func (rw *SQLiteWriter) cleanHeader() {
 	// we need to iterate once over the header and keep track if the name appeared before
 	// if so, the second one to appear needs to have __2 appended, third __3 etc
 	for _, name := range rw.header {
+		// strip all control characters from the column name
+		var accepted []rune
+		for _, r := range name {
+			if !unicode.IsControl(r) {
+				accepted = append(accepted, r)
+			}
+		}
+		name = string(accepted)
 		if _, ok := uniq[strings.ToLower(name)]; ok {
 			uniq[strings.ToLower(name)]++
 		} else {
