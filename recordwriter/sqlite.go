@@ -8,14 +8,13 @@ import (
 	"hash/fnv"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unsafe"
 
 	"github.com/productsupcom/go-sqlite-lite/sqlite3"
+	"github.com/terwey/recordwriter/util"
 )
 
 type SQLiteWriter struct {
@@ -61,40 +60,6 @@ func (rw *SQLiteWriter) GetPath() string {
 	return rw.path
 }
 
-func (rw *SQLiteWriter) cleanHeader() {
-	rw.mutex.Lock()
-	var buf []string
-	uniq := make(map[string]int)
-
-	// to keep compatibility with the previous header creation
-	// we need to iterate once over the header and keep track if the name appeared before
-	// if so, the second one to appear needs to have __2 appended, third __3 etc
-	for _, name := range rw.header {
-		// strip all control characters from the column name
-		var accepted []rune
-		for _, r := range name {
-			if !unicode.IsControl(r) {
-				accepted = append(accepted, r)
-			}
-		}
-		name = string(accepted)
-		if _, ok := uniq[strings.ToLower(name)]; ok {
-			uniq[strings.ToLower(name)]++
-		} else {
-			uniq[strings.ToLower(name)] = 1
-		}
-
-		// sqlite doesn't care about what characters appear inside a column name as long as it's quoted
-		if uniq[strings.ToLower(name)] > 1 {
-			buf = append(buf, strconv.Quote(fmt.Sprintf("%s__%d", name, uniq[strings.ToLower(name)])))
-		} else {
-			buf = append(buf, strconv.Quote(name))
-		}
-	}
-	rw.header = buf
-	rw.mutex.Unlock()
-}
-
 func (rw *SQLiteWriter) WriteHeader(s string) {
 	if rw.processedHeaderSet {
 		return
@@ -113,7 +78,9 @@ func (rw *SQLiteWriter) SetProcessedHeader(header []string) {
 
 func (rw *SQLiteWriter) FinalizeHeader() []string {
 	if !rw.processedHeaderSet {
-		rw.cleanHeader()
+		rw.mutex.Lock()
+		rw.header = util.CleanHeader(rw.header)
+		rw.mutex.Unlock()
 	}
 	rw.mutex.Lock()
 	var err error
