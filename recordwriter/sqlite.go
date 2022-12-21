@@ -255,30 +255,29 @@ func (rw *SQLiteWriter) Skip() {
 	} else {
 		debug("Skip called for overflowing skip %d", rw.count)
 	}
-	if !rw.lastItemWasWrite {
-		if len(rw.header) > rw.count {
-			debug("Skipping REALLY for %s", rw.header[rw.count])
+
+	if len(rw.header) > rw.count {
+		debug("Skipping REALLY for %s", rw.header[rw.count])
+	} else {
+		if Overflow {
+			debug("Overflowing REALLY skip %d", rw.count)
 		} else {
-			if Overflow {
-				debug("Overflowing REALLY skip %d", rw.count)
-			} else {
-				return
-			}
+			return
 		}
-
-		if err := rw.stmt.BindNull(rw.count); err != nil {
-			rw.handleError(err)
-		}
-
-		// originally this wrote away a nil but the existing implementation writes an empty string
-		// if err := rw.stmt.BindEmptyString(rw.count); err != nil {
-		// 	rw.handleError(err)
-		// 	// log.Fatal(err)
-		// }
-		rw.appendToBuf(nil)
-		rw.count++
 	}
-	rw.lastItemWasWrite = false
+
+	if err := rw.stmt.BindNull(rw.count); err != nil {
+		rw.handleError(err)
+	}
+
+	// originally this wrote away a nil but the existing implementation writes an empty string
+	// if err := rw.stmt.BindEmptyString(rw.count); err != nil {
+	// 	rw.handleError(err)
+	// 	// log.Fatal(err)
+	// }
+	rw.appendToBuf(nil)
+	rw.count++
+	rw.lastItemWasWrite = true
 }
 
 func (rw *SQLiteWriter) EOR(columns int) {
@@ -342,31 +341,33 @@ func (rw *SQLiteWriter) EORMulti() {
 
 func (rw *SQLiteWriter) handleError(err error) {
 	// header := rw.getCreateColumns()
-	print("\n----------")
-	print("Failed importing to SQLite")
-	print("header (len: %d): \n----------\n%v", len(rw.header), rw.header)
-	print("%s", err)
-	print("----------")
+	var printBuf strings.Builder
+	printBuf.WriteString("\n----------\n")
+	printBuf.WriteString("Failed importing to SQLite\n")
+	printBuf.WriteString(fmt.Sprintf("header (len: %d): \n----------\n%v\n", len(rw.header), rw.header))
+	printBuf.WriteString(err.Error() + "\n")
+	printBuf.WriteString("----------\n")
 	if len(rw.debugBuf) != 0 {
-		print("Data in buffer:")
+		printBuf.WriteString("Data in buffer:\n")
 		for i, s := range rw.debugBuf {
 			if len(rw.header) > i {
 				if data, ok := s.([]uint8); ok {
-					print("%s (%d): %s", rw.header[i], i, data)
+					printBuf.WriteString(fmt.Sprintf("%s (%d): %s\n", rw.header[i], i, data))
 				} else {
-					print("%s (%d): %v", rw.header[i], i, s)
+					printBuf.WriteString(fmt.Sprintf("%s (%d): %v\n", rw.header[i], i, s))
 				}
 			} else {
 				if data, ok := s.([]uint8); ok {
-					print("%d: %s", i, data)
+					printBuf.WriteString(fmt.Sprintf("%d: %s\n", i, data))
 				} else {
-					print("%d: %v", i, s)
+					printBuf.WriteString(fmt.Sprintf("%d: %v\n", i, s))
 				}
 			}
 		}
-		print("----------")
+		printBuf.WriteString("\n----------\n")
 	}
-	print("Ending")
+	printBuf.WriteString("Ending\n")
+	print(printBuf.String())
 	panic("Failed to process SQLite writer")
 }
 
