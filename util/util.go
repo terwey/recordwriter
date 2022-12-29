@@ -21,7 +21,7 @@ func CleanHeader(header []string) []string {
 		// strip all control characters from the column name
 		var accepted []rune
 		for _, r := range name {
-			if !unicode.IsControl(r) {
+			if !unicode.IsControl(r) && r != '\u200B' && r != '\uFEFF' {
 				accepted = append(accepted, r)
 			}
 		}

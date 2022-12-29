@@ -26,6 +26,11 @@ func TestCleanHeader(t *testing.T) {
 			header: []string{"col1", "col2", "col1"},
 			want:   []string{"\"col1\"", "\"col2\"", "\"col1__2\""},
 		},
+		{
+			name:   "two columns no dupes with u200b",
+			header: []string{"col1_\u200bfoo", "col2"},
+			want:   []string{"\"col1_foo\"", "\"col2\""},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
