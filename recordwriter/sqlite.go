@@ -527,7 +527,7 @@ func (rw *SQLiteWriter) getCreateColumns() []string {
 		if v == `"rowid"` {
 			continue
 		}
-		buf = append(buf, v+` TEXT`)
+		buf = append(buf, v+` TEXT default ''`)
 	}
 
 	return buf
