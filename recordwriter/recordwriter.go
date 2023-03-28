@@ -41,6 +41,7 @@ type RecordWriter interface {
 	CloseArray(key string)
 	WriteNull()
 	Multibyte(out []byte, pos []uint32, columns int)
+	GetPath() string
 
 	Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration)
 }

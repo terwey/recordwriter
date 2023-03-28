@@ -188,7 +188,9 @@ func (rw *SQLiteWriter) Write(s string) {
 func (rw *SQLiteWriter) WriteByte(s []byte) {
 
 	if len(rw.header) > rw.count {
-		debug("Writing to %s = %s", rw.header[rw.count], s)
+		if rw.count == 0 {
+			debug("Writing to %s = %s", rw.header[rw.count], s)
+		}
 	} else {
 		if Overflow {
 			debug("Overflowing %d = %s", rw.count, s)
@@ -198,6 +200,7 @@ func (rw *SQLiteWriter) WriteByte(s []byte) {
 	}
 
 	if err := rw.stmt.BindBytes(s, rw.count); err != nil {
+		print("[WriteByte] s: %s", s)
 		rw.handleError(err)
 	}
 	rw.appendToBuf(s)
@@ -378,7 +381,11 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 	started := false
 	var start time.Time
 	var mergeWg sync.WaitGroup
-	for target := range ready {
+	for {
+		target, more := <-ready
+		if !more {
+			break
+		}
 		if !started {
 			started = true
 			start = time.Now()
@@ -527,7 +534,7 @@ func (rw *SQLiteWriter) getCreateColumns() []string {
 		if v == `"rowid"` {
 			continue
 		}
-		buf = append(buf, v+` TEXT default ''`)
+		buf = append(buf, v+` TEXT DEFAULT ''`)
 	}
 
 	return buf
