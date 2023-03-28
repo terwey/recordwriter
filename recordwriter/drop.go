@@ -27,7 +27,9 @@ func (d *DropWriter) FinalizeHeader() []string {
 func (d *DropWriter) Write(s string) {}
 
 // WriteByte append the bytes as a column to the row
-func (d *DropWriter) WriteByte(s []byte)      {}
+func (d *DropWriter) WriteByte(s []byte) {
+	// io.Discard.Write(s)
+}
 func (d *DropWriter) WriteSlice(val []string) {}
 
 // Next writes a comma
@@ -44,8 +46,10 @@ func (d *DropWriter) Close() error {
 func (d *DropWriter) BeginArray(key string) {}
 func (d *DropWriter) CloseArray(key string) {}
 func (d *DropWriter) WriteNull()            {}
+func (d *DropWriter) GetPath() string {
+	return ""
+}
 
-// TODO: dummy method
 func (d *DropWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration chan time.Duration) {
 	defer wg.Done()
 	started := false
@@ -55,6 +59,8 @@ func (d *DropWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration cha
 			started = true
 			start = time.Now()
 		}
+
+		// io.Discard.Write([]byte(target))
 	}
 	duration <- time.Since(start)
 }
