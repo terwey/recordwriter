@@ -199,7 +199,7 @@ func (rw *SQLiteWriter) WriteByte(s []byte) {
 		}
 	}
 
-	if err := rw.stmt.BindBytes(s, rw.count); err != nil {
+	if err := rw.stmt.BindString(ByteSlice2String(s), rw.count); err != nil {
 		print("[WriteByte] s: %s", s)
 		rw.handleError(err)
 	}
@@ -269,15 +269,10 @@ func (rw *SQLiteWriter) Skip() {
 		}
 	}
 
-	if err := rw.stmt.BindNull(rw.count); err != nil {
+	if err := rw.stmt.BindEmptyString(rw.count); err != nil {
 		rw.handleError(err)
 	}
 
-	// originally this wrote away a nil but the existing implementation writes an empty string
-	// if err := rw.stmt.BindEmptyString(rw.count); err != nil {
-	// 	rw.handleError(err)
-	// 	// log.Fatal(err)
-	// }
 	rw.appendToBuf(nil)
 	rw.count++
 	rw.lastItemWasWrite = true
