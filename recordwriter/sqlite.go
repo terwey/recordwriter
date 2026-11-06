@@ -418,7 +418,7 @@ func (rw *SQLiteWriter) Merge(ready <-chan string, wg *sync.WaitGroup, duration 
 			h := fnv.New32a()
 			h.Write([]byte(target))
 
-			err = conn.Exec(fmt.Sprintf("ATTACH DATABASE '%s' AS db%d", target, h.Sum32()))
+			err = conn.Exec(fmt.Sprintf("ATTACH DATABASE ? AS db%d", h.Sum32()), target)
 			if err != nil {
 				log.Fatalf("Cannot attach (%s): %s", target, err)
 			}
